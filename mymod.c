@@ -47,14 +47,11 @@ static int dump_pagetable(void)
 	u64 cr0, cr3, cr4 = 0;
 	u64 ia32_efer = 0;
 
-
-
 	BUILD_BUG_ON(sizeof(struct page_table) != 4096);
 	BUILD_BUG_ON(sizeof(void *) != 8);
 	BUILD_BUG_ON(PAGE_SIZE != 4096);
 	BUILD_BUG_ON(sizeof(pteval_t) != sizeof(u64));
 
-	pr_warn("Hello, world\n");
 	printk("(%s) x86_phys_bits %hu\n", boot_cpu_data.x86_vendor_id, boot_cpu_data.x86_phys_bits);
 
 	if(boot_cpu_data.x86_phys_bits != 36){
@@ -72,6 +69,10 @@ static int dump_pagetable(void)
 	if(rdmsrl_safe(MSR_EFER, &ia32_efer)){
 		printk("Error reading MSR\n");
 		return 1;
+	}
+
+	if(!(ia32_efer & EFER_NX)){
+		printk("No IA32_EFER.NXE?????\n");
 	}
 
 
@@ -125,14 +126,14 @@ static int dump_pagetable(void)
 			addr |= (0xffffLL << 48);
 		}
 		addr_max |= addr;
-		printk("v %p %p %s %s %s %s %s\n",
+		printk("v %p %p %s %s %s %s %s %s\n",
 			(void*)addr, (void*)addr_max,
 			e & _PAGE_RW ? "W" : "R",
 			e & _PAGE_USER ? "U" : "K" /*kernel*/,
 			e & _PAGE_PWT ? "PWT" : "",
 			e & _PAGE_PCD ? "PCD" : "",
-			e & _PAGE_ACCESSED ? "A" : ""
-			/*TODO: NX at pos 63, if enabled*/
+			e & _PAGE_ACCESSED ? "A" : "",
+			e & _PAGE_NX ? "NX" : ""
 			);
 
 		/*phsical address of next page table level*/
@@ -161,14 +162,14 @@ static int dump_pagetable(void)
 			addr_pdpt |= addr;
 			addr_pdpt_max = 0x3fffffffLL; //2**30-1
 			addr_pdpt_max |= addr_pdpt;
-			printk("  v %p %p %s %s %s %s %s\n",
+			printk("  v %p %p %s %s %s %s %s %s\n",
 				(void*)addr_pdpt, (void*)addr_pdpt_max,
 				e & _PAGE_RW ? "W" : "R",
 				e & _PAGE_USER ? "U" : "K" /*kernel*/,
 				e & _PAGE_PWT ? "PWT" : "",
 				e & _PAGE_PCD ? "PCD" : "",
-				e & _PAGE_ACCESSED ? "A" : ""
-				/*TODO: NX at pos 63, if enabled*/
+				e & _PAGE_ACCESSED ? "A" : "",
+				e & _PAGE_NX ? "NX" : ""
 				);
 			if(e & _PAGE_PSE){
 				printk("1GB page\n");
@@ -208,6 +209,7 @@ struct dentry *pagetbl_debug_root;
 
 static int __init test_module_init(void)
 {
+	pr_warn("Hello, world\n");
 	pagetbl_debug_root = debugfs_create_dir("corny", NULL);
 	if (!pagetbl_debug_root)
 		return -ENOMEM;
