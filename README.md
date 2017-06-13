@@ -79,7 +79,11 @@ v ffffff8000000000 ffffffffffffffff W U   A
 
 *Yes!* Don't run this on your production machine! This is just a test module!
 
-What could possibly go wrong? I'm just dumping the page table starting from the CPUs `cr3`. My module does not attempt any locking. While dumping the page tables, the kernel may already has changed the mappings. This would mean that I dereference invalid memory.
+What could possibly go wrong? I'm just dumping the page table starting from the CPUs `cr3`. My module does not attempt any locking. While dumping the page tables, the kernel may already has changed the mappings from under my feet. This would mean that my module dereferences invalid memory.
+
+### How would I do this the correct way?
+Use `/proc/self/maps` to inspect the userpsace memory layout.
+Use `/sys/kernel/debug/kernel_page_tables` to inspect the kernel page tables. That module uses the Kernel API correctly and is [extremely simple](http://elixir.free-electrons.com/linux/v4.11.4/source/arch/x86/mm/debug_pagetables.c).
 
 
 
