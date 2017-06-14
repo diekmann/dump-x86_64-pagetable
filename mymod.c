@@ -100,7 +100,7 @@ static inline u64 pte_addr_part(int index, int bitpos)
  *  1: descend to deeper levels
  *  0: stop descending
  * */
-int dump_entry(struct dumptbl_state *state, int bitpos)
+int dump_entry(struct seq_file *s, struct dumptbl_state *state, int bitpos)
 {
 	char *str_level;
 	struct page_table *table; //page table
@@ -139,7 +139,7 @@ int dump_entry(struct dumptbl_state *state, int bitpos)
 		case 21: /*PD*/
 			table = state->pd;
 			i = state->pd_i;
-			str_level = "    pd";
+			str_level = "      pd";
 			CORNY_ASSERT((state->pml4_baddr | state->pdpt_baddr) == state->pdpt_baddr);
 			outer_baddr = state->pdpt_baddr;
 			baddr = &state->pd_baddr;
@@ -161,7 +161,7 @@ int dump_entry(struct dumptbl_state *state, int bitpos)
 	CORNY_ASSERT((state->pml4_baddr & addr_max) == 0); //no overlapping bits
 	CORNY_ASSERT(((state->pdpt_baddr & addr_max) == 0)); //no overlapping bits
 	addr_max |= *baddr;
-	printk("%s v %p %p %s %s %s %s %s %s\n", str_level,
+	seq_printf(s, "%s v %p %p %s %s %s %s %s %s", str_level,
 		(void*)*baddr, (void*)addr_max,
 		e & _PAGE_RW ? "W" : "R",
 		e & _PAGE_USER ? "U" : "K" /*kernel*/,
@@ -171,9 +171,10 @@ int dump_entry(struct dumptbl_state *state, int bitpos)
 		e & _PAGE_NX ? "NX" : ""
 		);
 	if(e & _PAGE_PSE){
-		printk("%s page\n", string_page_size(bitpos));
+		seq_printf(s, " -> %s page\n", string_page_size(bitpos));
 		return 0; // do not descend to any deeper page tables!
 	}
+	seq_printf(s, "\n");
 	return 1; //continue
 }
 
@@ -196,7 +197,7 @@ void* next_page_table_vaddr(u64 pagetbl_entry)
 	return vaddr;
 }
 
-static int dump_pagetable(void)
+static int dump_pagetable(struct seq_file *s)
 {
 
 	struct dumptbl_state state = {0};
@@ -214,10 +215,10 @@ static int dump_pagetable(void)
 	BUILD_BUG_ON(PAGE_SIZE != 4096);
 	BUILD_BUG_ON(sizeof(pteval_t) != sizeof(u64));
 
-	printk("(%s) x86_phys_bits %hu\n", boot_cpu_data.x86_vendor_id, boot_cpu_data.x86_phys_bits);
+	seq_printf(s, "(%s) x86_phys_bits %hu\n", boot_cpu_data.x86_vendor_id, boot_cpu_data.x86_phys_bits);
 
 	if(boot_cpu_data.x86_phys_bits != 36){
-		printk("MAXPHYADDR should usually be 36 but is is %u\n", boot_cpu_data.x86_phys_bits);
+		seq_printf(s, "MAXPHYADDR should usually be 36 but is is %u\n", boot_cpu_data.x86_phys_bits);
 	}
 	state.maxphyaddr = boot_cpu_data.x86_phys_bits;
 
@@ -229,44 +230,44 @@ static int dump_pagetable(void)
 	__asm__ __volatile__ ("mov %%cr4, %%rax \n mov %%rax,%0": "=m" (cr4) : /*InputOperands*/ : "rax");
 
 	if(rdmsrl_safe(MSR_EFER, &ia32_efer)){
-		printk("Error reading MSR\n");
+		seq_printf(s, "Error reading MSR\n");
 		return 1;
 	}
 
 	if(!(ia32_efer & EFER_NX)){
-		printk("No IA32_EFER.NXE?????\n");
+		seq_printf(s, "No IA32_EFER.NXE?????\n");
 	}
 
 
-	printk("cr3: 0x%llx\n", cr3);
+	seq_printf(s, "cr3: 0x%llx\n", cr3);
 	if(cr3 & 0xfe7 /*ignored*/
 	   || (cr3 & (0xffffffffffffffffLL << state.maxphyaddr) /*reserved*/)){
-		printk("cr3 looks shady\n");
+		seq_printf(s, "cr3 looks shady\n");
 	}
 	if(cr3 & X86_CR3_PWT || cr3 & X86_CR3_PCD){
-		printk("unexpected options in cr3\n");
+		seq_printf(s, "unexpected options in cr3\n");
 	}
 	if(cr0 & X86_CR0_PG  &&  cr4 & X86_CR4_PAE  &&  ia32_efer & EFER_LME  &&  !(cr4 & X86_CR4_PCIDE)){
-		printk("paging according to Tab 4-12 p. 2783 intel dev manual (March 2017)\n");
+		seq_printf(s, "paging according to Tab 4-12 p. 2783 intel dev manual (March 2017)\n");
 	}else{
-		printk("unknown paging setup\n");
+		seq_printf(s, "unknown paging setup\n");
 		return -EPERM; /*I'm afraid I can't do that*/
 	}
 	if(!(cr4 & X86_CR4_PKE)){
-		printk("No protection keys enabled (this is normal)\n");
+		seq_printf(s, "No protection keys enabled (this is normal)\n");
 	}
 
 	state.pml4 = phys_to_virt(cr3);
-	printk("page table in virtual memory at %p\n", state.pml4);
+	seq_printf(s, "page table in virtual memory at %p\n", state.pml4);
 	if(!virt_addr_valid(state.pml4) || !IS_ALIGNED(cr3, 4096)){
-		printk("invalid addr!\n");
+		seq_printf(s, "invalid addr!\n");
 		return 1; /*error*/
 	}
 
 
 	//walk the outermost page table
 	for(state.pml4_i = 0; state.pml4_i < 512; ++state.pml4_i){
-		if(!dump_entry(&state, 39)){
+		if(!dump_entry(s, &state, 39)){
 			//outer level cannot map a page directly but it can have pages which are nto present
 			continue;
 		}
@@ -274,11 +275,11 @@ static int dump_pagetable(void)
 		// walk next level
 		state.pdpt = next_page_table_vaddr((u64)state.pml4->entry[state.pml4_i]);
 		for(state.pdpt_i = 0; state.pdpt_i < 512; ++state.pdpt_i){
-			if(dump_entry(&state, 30)){
+			if(dump_entry(s, &state, 30)){
 				// walk next level
 				state.pd = next_page_table_vaddr((u64)state.pdpt->entry[state.pdpt_i]);
 				for(state.pd_i = 0; state.pd_i < 512; ++state.pd_i){
-					if(dump_entry(&state, 21)){
+					if(dump_entry(s, &state, 21)){
 						//print next levels here
 					}
 				};
@@ -298,8 +299,8 @@ static int dump_pagetable(void)
 
 static int pagetbl_seq_show(struct seq_file *s, void *v)
 {
-        seq_printf(s, "dumping with printk. yolo.\n");
-	int ret = dump_pagetable();
+        seq_printf(s, "dumping all in one go. yolo.\n");
+	int ret = dump_pagetable(s);
 	if(ret){
 		seq_printf(s, "Something went wrong, errror %d\n", ret);
 	}
