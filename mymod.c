@@ -55,6 +55,49 @@ static struct dumptbl_state {
 	u64 pdpt_baddr;
 };
 
+int dump_pdpt_entry(struct dumptbl_state *state)
+{
+	CORNY_ASSERT(state->pml4_i < 512);
+	CORNY_ASSERT(state->pdpt_i < 512);
+
+	u64 addr_pdpt_max;
+	u64 e = (u64)state->pdpt->entry[state->pdpt_i];
+
+	CORNY_ASSERT(check_entry(e));
+	if(!(e & _PAGE_PRESENT)){
+		/*skip page which is marked not present*/
+		goto increment_out;
+	}
+	state->pdpt_baddr = state->pdpt_i;
+	state->pdpt_baddr <<= 30; //bits 30:38 (inclusive)
+	CORNY_ASSERT((state->pml4_baddr & state->pdpt_baddr) == 0);//no overlapping bits
+	state->pdpt_baddr |= state->pml4_baddr;
+	addr_pdpt_max = 0x3fffffffLL; //2**30-1
+	addr_pdpt_max |= state->pdpt_baddr;
+	printk("  v %p %p %s %s %s %s %s %s\n",
+		(void*)state->pdpt_baddr, (void*)addr_pdpt_max,
+		e & _PAGE_RW ? "W" : "R",
+		e & _PAGE_USER ? "U" : "K" /*kernel*/,
+		e & _PAGE_PWT ? "PWT" : "",
+		e & _PAGE_PCD ? "PCD" : "",
+		e & _PAGE_ACCESSED ? "A" : "",
+		e & _PAGE_NX ? "NX" : ""
+		);
+	if(e & _PAGE_PSE){
+		printk("1GB page\n");
+		goto increment_out;
+	}
+
+increment_out:
+	if(++state->pdpt_i >= 512){
+		state->pdpt_i = 0;
+		return 0;
+	}else{
+		return 1;
+	}
+}
+
+
 static int dump_pagetable(void)
 {
 
@@ -165,34 +208,7 @@ static int dump_pagetable(void)
 			printk("pdpt invalid addr!\n");
 			return 1; /*error*/
 		}
-		for(state.pdpt_i = 0; state.pdpt_i < 512; ++state.pdpt_i){
-			u64 addr_pdpt_max;
-			u64 e = (u64)state.pdpt->entry[state.pdpt_i];
-			CORNY_ASSERT(check_entry(e));
-			if(!(e & _PAGE_PRESENT)){
-				/*skip page which is marked not present*/
-				continue;
-			}
-			state.pdpt_baddr = state.pdpt_i;
-			state.pdpt_baddr <<= 30; //bits 30:38 (inclusive)
-			CORNY_ASSERT((state.pml4_baddr & state.pdpt_baddr) == 0);//no overlapping bits
-			state.pdpt_baddr |= state.pml4_baddr;
-			addr_pdpt_max = 0x3fffffffLL; //2**30-1
-			addr_pdpt_max |= state.pdpt_baddr;
-			printk("  v %p %p %s %s %s %s %s %s\n",
-				(void*)state.pdpt_baddr, (void*)addr_pdpt_max,
-				e & _PAGE_RW ? "W" : "R",
-				e & _PAGE_USER ? "U" : "K" /*kernel*/,
-				e & _PAGE_PWT ? "PWT" : "",
-				e & _PAGE_PCD ? "PCD" : "",
-				e & _PAGE_ACCESSED ? "A" : "",
-				e & _PAGE_NX ? "NX" : ""
-				);
-			if(e & _PAGE_PSE){
-				printk("1GB page\n");
-				continue;
-			}
-		}
+		while(dump_pdpt_entry(&state)){};
 	}
 	return 0;
 }
