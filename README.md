@@ -2,7 +2,7 @@
 
 Linux Kernel module to dump the page tables currently used by the CPU on intel 64bit systems with 4 level paging.
 
-Tested on Kernel 4.9.0.
+Tested on Kernel 4.9 and 4.4.
 
 
 ### Example

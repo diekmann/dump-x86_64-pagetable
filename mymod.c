@@ -9,6 +9,12 @@
   #error "wrong arch"
 #endif
 
+#ifndef X86_CR4_PKE
+//defined in Linux >= 4.6
+#define X86_CR4_PKE_BIT		22 /* enable Protection Keys support */
+#define X86_CR4_PKE		_BITUL(X86_CR4_PKE_BIT)
+#endif
+
 #define CORNY_ASSERT(cond) do { if (!(cond)) {printk("Assertion failed\n");} } while (0)
 
 struct page_table{
