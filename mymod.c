@@ -72,8 +72,7 @@ int dump_pdpt_entry(struct dumptbl_state *state)
 	state->pdpt_baddr <<= 30; //bits 30:38 (inclusive)
 	CORNY_ASSERT((state->pml4_baddr & state->pdpt_baddr) == 0);//no overlapping bits
 	state->pdpt_baddr |= state->pml4_baddr;
-	addr_pdpt_max = 0x3fffffffLL; //2**30-1
-	CORNY_ASSERT((1LL << 30) - 1 == addr_pdpt_max);
+	addr_pdpt_max = (1LL << 30) - 1; //2**30-1
 	addr_pdpt_max |= state->pdpt_baddr;
 	printk("  v %p %p %s %s %s %s %s %s\n",
 		(void*)state->pdpt_baddr, (void*)addr_pdpt_max,
@@ -124,9 +123,7 @@ static int dump_pagetable(void)
 	}
 	state.maxphyaddr = boot_cpu_data.x86_phys_bits;
 
-	BUILD_BUG_ON(sizeof(unsigned long) != sizeof(u64)); // bitmap API uses unsigned long, I want u64. HACK HACK
-	bitmap_fill((unsigned long*)&pte_reserved_flags, 51 - state.maxphyaddr + 1);
-	CORNY_ASSERT(pte_reserved_flags ==  (1LL << (51 - state.maxphyaddr + 1)) - 1);
+	pte_reserved_flags = (1LL << (51 - state.maxphyaddr + 1)) - 1; //bitmap with up to 51 bit set
 	pte_reserved_flags <<= state.maxphyaddr;
 
 	__asm__ __volatile__ ("mov %%cr0, %%rax \n mov %%rax,%0": "=m" (cr0) : /*InputOperands*/ : "rax");
@@ -201,7 +198,7 @@ static int dump_pagetable(void)
 			);
 
 		/*phsical address of next page table level*/
-		bitmap_fill((unsigned long*)&bm, 51 - 12 + 1);
+		bm = (1LL << (51 - 12 + 1)) - 1;
 		bm <<= 12;
 		pdpt_addr = e & bm;
 
