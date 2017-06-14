@@ -17,6 +17,11 @@
 
 #define CORNY_ASSERT(cond) do { if (!(cond)) {printk("Assertion failed\n");} } while (0)
 
+static inline u64 bitmask_numbits(int numbits)
+{
+	return (1LL << numbits) - 1;
+}
+
 struct page_table{
 	void* entry[512];
 };
@@ -72,7 +77,8 @@ int dump_pdpt_entry(struct dumptbl_state *state)
 	state->pdpt_baddr <<= 30; //bits 30:38 (inclusive)
 	CORNY_ASSERT((state->pml4_baddr & state->pdpt_baddr) == 0);//no overlapping bits
 	state->pdpt_baddr |= state->pml4_baddr;
-	addr_pdpt_max = (1LL << 30) - 1; //2**30-1
+	addr_pdpt_max = bitmask_numbits(30);
+	CORNY_ASSERT((state->pml4_baddr & addr_pdpt_max) == 0);//no overlapping bits
 	addr_pdpt_max |= state->pdpt_baddr;
 	printk("  v %p %p %s %s %s %s %s %s\n",
 		(void*)state->pdpt_baddr, (void*)addr_pdpt_max,
@@ -123,7 +129,7 @@ static int dump_pagetable(void)
 	}
 	state.maxphyaddr = boot_cpu_data.x86_phys_bits;
 
-	pte_reserved_flags = (1LL << (51 - state.maxphyaddr + 1)) - 1; //bitmap with up to 51 bit set
+	pte_reserved_flags = bitmask_numbits(51 - state.maxphyaddr + 1); //bitmap with up to 51 bit set
 	pte_reserved_flags <<= state.maxphyaddr;
 
 	__asm__ __volatile__ ("mov %%cr0, %%rax \n mov %%rax,%0": "=m" (cr0) : /*InputOperands*/ : "rax");
@@ -198,7 +204,7 @@ static int dump_pagetable(void)
 			);
 
 		/*phsical address of next page table level*/
-		bm = (1LL << (51 - 12 + 1)) - 1;
+		bm = bitmask_numbits(51 - 12 + 1);
 		bm <<= 12;
 		pdpt_addr = e & bm;
 
