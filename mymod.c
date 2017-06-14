@@ -81,7 +81,20 @@ struct dumptbl_state {
 	struct page_table *pd;
 	int pd_i;
 	u64 pd_baddr;
+
+	// compress output, don't print same entries all over
+	u64 last_addr;
+	u64 last_flags;
+	int skipped;
 };
+
+
+static inline u64 entry_extract_flags(u64 entry)
+{
+	// TODO dump more flags?
+	return entry & (_PAGE_NX | _PAGE_RW | _PAGE_USER | _PAGE_PWT | _PAGE_PCD | _PAGE_ACCESSED);
+}
+
 
 /*The part of the virtual address defined by the page table entry at index for the page table level indicated by bitpos*/
 static inline u64 pte_addr_part(int index, int bitpos)
@@ -107,10 +120,13 @@ int dump_entry(struct seq_file *s, struct dumptbl_state *state, int bitpos)
 	int i; //index into the table
 	u64 e; //page table entry 
 
+	int ret = 1; //continue descending
+
 	u64 *baddr; //pointer to state struct with base address of current entry. To be set in this function.
 	u64 outer_baddr; //base address of the outer page tables (base address of entry = outer_baddr | baddr)
 	u64 addr_max; //maximum virtual address described by the current page table entry
 
+	int _direct_mapping = 0; //entry maps a page directly
 
 	CORNY_ASSERT(bitpos == 39 || bitpos == 30 || bitpos == 21);
 	CORNY_ASSERT(state->pml4_i < 512);
@@ -151,7 +167,7 @@ int dump_entry(struct seq_file *s, struct dumptbl_state *state, int bitpos)
 
 	CORNY_ASSERT(check_entry(e));
 	if(!(e & _PAGE_PRESENT)){
-		/*skip page which is marked not present*/
+		/*skip page which is marked not present. Do not emit any output.*/
 		return 0;
 	}
 	*baddr = outer_baddr | pte_addr_part(i, bitpos);
@@ -161,21 +177,40 @@ int dump_entry(struct seq_file *s, struct dumptbl_state *state, int bitpos)
 	CORNY_ASSERT((state->pml4_baddr & addr_max) == 0); //no overlapping bits
 	CORNY_ASSERT(((state->pdpt_baddr & addr_max) == 0)); //no overlapping bits
 	addr_max |= *baddr;
-	seq_printf(s, "%s v %p %p %s %s %s %s %s %s", str_level,
-		(void*)*baddr, (void*)addr_max,
-		e & _PAGE_RW ? "W" : "R",
-		e & _PAGE_USER ? "U" : "K" /*kernel*/,
-		e & _PAGE_PWT ? "PWT" : "",
-		e & _PAGE_PCD ? "PCD" : "",
-		e & _PAGE_ACCESSED ? "A" : "",
-		e & _PAGE_NX ? "NX" : ""
-		);
+
 	if(e & _PAGE_PSE){
-		seq_printf(s, " -> %s page\n", string_page_size(bitpos));
-		return 0; // do not descend to any deeper page tables!
+		_direct_mapping = 1;
+		ret = 0; // do not descend to any deeper page tables!
 	}
-	seq_printf(s, "\n");
-	return 1; //continue
+
+	if((state->last_addr + 1 == *baddr) && (state->last_flags == entry_extract_flags(e))){
+		// don't print consecutive similar mappings
+		//seq_printf(s, ".");
+		++state->skipped;
+	}else{
+		if(state->skipped){
+			seq_printf(s, "%s skipped %d following entries (til %p)\n",
+				   str_level, state->skipped, (void*)state->last_addr);
+		}
+		state->skipped = 0;
+		seq_printf(s, "%s v %p %p %s %s %s %s %s %s", str_level,
+			(void*)*baddr, (void*)addr_max,
+			e & _PAGE_RW ? "W" : "R",
+			e & _PAGE_USER ? "U" : "K" /*kernel*/,
+			e & _PAGE_PWT ? "PWT" : "",
+			e & _PAGE_PCD ? "PCD" : "",
+			e & _PAGE_ACCESSED ? "A" : "",
+			e & _PAGE_NX ? "NX" : ""
+			);
+		if(_direct_mapping){
+			seq_printf(s, " -> %s page", string_page_size(bitpos));
+		}
+		seq_printf(s, "\n");
+	}
+
+	state->last_addr = addr_max;
+	state->last_flags = entry_extract_flags(e);
+	return ret;
 }
 
 void* next_page_table_vaddr(u64 pagetbl_entry)
