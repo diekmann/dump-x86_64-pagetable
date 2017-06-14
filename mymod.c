@@ -43,9 +43,23 @@ static int check_entry(u64 e){
 	return 1;
 }
 
+static struct dumptbl_state {
+	int maxphyaddr;
+
+	struct page_table *pml4; /*pointer to pml4 page table in virtual memory*/
+	int pml4_i; /*current index into the pml4, points to a pml4e (pml4 entry)*/
+	u64 pml4_baddr; /*virtual memory base address mapped by current pml4e*/
+
+	struct page_table *pdpt;
+	int pdpt_i;
+	u64 pdpt_baddr;
+};
 
 static int dump_pagetable(void)
 {
+
+	struct dumptbl_state state = {0};
+
 	/* https://software.intel.com/sites/default/files/managed/39/c5/325462-sdm-vol-1-2abcd-3abcd.pdf pp.2783
 	 * March 2017, version 062 */
 
@@ -54,7 +68,8 @@ static int dump_pagetable(void)
 	u64 ia32_efer = 0;
 
 	BUILD_BUG_ON(sizeof(struct page_table) != 4096);
-	BUILD_BUG_ON(sizeof(void *) != 8);
+	BUILD_BUG_ON(sizeof(void *) != sizeof(u64));
+	BUILD_BUG_ON(sizeof(struct page_table) / sizeof(void *) != 512);
 	BUILD_BUG_ON(PAGE_SIZE != 4096);
 	BUILD_BUG_ON(sizeof(pteval_t) != sizeof(u64));
 
@@ -63,10 +78,11 @@ static int dump_pagetable(void)
 	if(boot_cpu_data.x86_phys_bits != 36){
 		printk("MAXPHYADDR should usually be 36 but is is %u\n", boot_cpu_data.x86_phys_bits);
 	}
+	state.maxphyaddr = boot_cpu_data.x86_phys_bits;
 
 	BUILD_BUG_ON(sizeof(unsigned long) != sizeof(u64)); // bitmap API uses unsigned long, I want u64. HACK HACK
-	bitmap_fill((unsigned long*)&pte_reserved_flags, 51 - boot_cpu_data.x86_phys_bits + 1);
-	pte_reserved_flags <<= boot_cpu_data.x86_phys_bits;
+	bitmap_fill((unsigned long*)&pte_reserved_flags, 51 - state.maxphyaddr + 1);
+	pte_reserved_flags <<= state.maxphyaddr;
 
 	__asm__ __volatile__ ("mov %%cr0, %%rax \n mov %%rax,%0": "=m" (cr0) : /*InputOperands*/ : "rax");
 	__asm__ __volatile__ ("mov %%cr3, %%rax \n mov %%rax,%0": "=m" (cr3) : /*InputOperands*/ : "rax");
@@ -84,7 +100,7 @@ static int dump_pagetable(void)
 
 	printk("cr3: 0x%llx\n", cr3);
 	if(cr3 & 0xfe7 /*ignored*/
-	   || (cr3 & (0xffffffffffffffffLL << boot_cpu_data.x86_phys_bits) /*reserved*/)){
+	   || (cr3 & (0xffffffffffffffffLL << state.maxphyaddr) /*reserved*/)){
 		printk("cr3 looks shady\n");
 	}
 	if(cr3 & X86_CR3_PWT || cr3 & X86_CR3_PCD){
@@ -100,40 +116,37 @@ static int dump_pagetable(void)
 		printk("No protection keys enabled (this is normal)\n");
 	}
 
-	struct page_table *pml4 = phys_to_virt(cr3);
-	printk("page table in virtual memory at %p\n", pml4);
-	if(!virt_addr_valid(pml4) || !IS_ALIGNED(cr3, 4096)){
+	state.pml4 = phys_to_virt(cr3);
+	printk("page table in virtual memory at %p\n", state.pml4);
+	if(!virt_addr_valid(state.pml4) || !IS_ALIGNED(cr3, 4096)){
 		printk("invalid addr!\n");
 		return 1; /*error*/
 	}
 
 	phys_addr_t pdpt_addr;
-	struct page_table *pdpt;
-	struct page_table *pd;
 
-	int i,j;
 	u64 bm; //bitmap
-	u64 addr, addr_max;
+	u64 addr_max;
 	//walk the outermost page table
-	for(i = 0; i < 512; ++i){
-		u64 e = (u64)pml4->entry[i];
+	for(state.pml4_i = 0; state.pml4_i < 512; ++state.pml4_i){
+		u64 e = (u64)state.pml4->entry[state.pml4_i];
 		CORNY_ASSERT(check_entry(e));
 		if(!(e & _PAGE_PRESENT)){
 			/*skip page which is marked not present*/
 			continue;
 		}
-		printk("entry %p\n", pml4->entry[i]);
-		addr = i;
-		addr <<= 39; //bits 39:47 (inclusive)
+		printk("entry %p\n", (void*)e);
+		state.pml4_baddr = state.pml4_i;
+		state.pml4_baddr <<= 39; //bits 39:47 (inclusive)
 		addr_max = 0x7fffffffffLL; //2**39-1
-		if(addr & (1LL << 47) /*highest bit set*/){
-			CORNY_ASSERT((addr & 0xffffLL<<48) == 0);
+		if(state.pml4_baddr & (1LL << 47) /*highest bit set*/){
+			CORNY_ASSERT((state.pml4_baddr & 0xffffLL<<48) == 0);
 			CORNY_ASSERT((addr_max & 0xffffLL<<48) == 0);
-			addr |= (0xffffLL << 48);
+			state.pml4_baddr |= (0xffffLL << 48);
 		}
-		addr_max |= addr;
+		addr_max |= state.pml4_baddr;
 		printk("v %p %p %s %s %s %s %s %s\n",
-			(void*)addr, (void*)addr_max,
+			(void*)state.pml4_baddr, (void*)addr_max,
 			e & _PAGE_RW ? "W" : "R",
 			e & _PAGE_USER ? "U" : "K" /*kernel*/,
 			e & _PAGE_PWT ? "PWT" : "",
@@ -147,29 +160,27 @@ static int dump_pagetable(void)
 		bm <<= 12;
 		pdpt_addr = e & bm;
 
-		pdpt = phys_to_virt(pdpt_addr);
-		//printk("pdpt in virtual memory at %p\n", pdpt);
-		if(!virt_addr_valid(pdpt) || !IS_ALIGNED(pdpt_addr, 4096)){
+		state.pdpt = phys_to_virt(pdpt_addr);
+		if(!virt_addr_valid(state.pdpt) || !IS_ALIGNED(pdpt_addr, 4096)){
 			printk("pdpt invalid addr!\n");
 			return 1; /*error*/
 		}
-		for(j = 0; j < 512; ++j){
-			u64 addr_pdpt, addr_pdpt_max;
-			u64 e = (u64)pdpt->entry[j];
+		for(state.pdpt_i = 0; state.pdpt_i < 512; ++state.pdpt_i){
+			u64 addr_pdpt_max;
+			u64 e = (u64)state.pdpt->entry[state.pdpt_i];
 			CORNY_ASSERT(check_entry(e));
 			if(!(e & _PAGE_PRESENT)){
 				/*skip page which is marked not present*/
 				continue;
 			}
-			//printk("  entry %p\n", pdpt->entry[j]);
-			addr_pdpt = j;
-			addr_pdpt <<= 30; //bits 30:38 (inclusive)
-			CORNY_ASSERT((addr & addr_pdpt) == 0);//no overlapping bits
-			addr_pdpt |= addr;
+			state.pdpt_baddr = state.pdpt_i;
+			state.pdpt_baddr <<= 30; //bits 30:38 (inclusive)
+			CORNY_ASSERT((state.pml4_baddr & state.pdpt_baddr) == 0);//no overlapping bits
+			state.pdpt_baddr |= state.pml4_baddr;
 			addr_pdpt_max = 0x3fffffffLL; //2**30-1
-			addr_pdpt_max |= addr_pdpt;
+			addr_pdpt_max |= state.pdpt_baddr;
 			printk("  v %p %p %s %s %s %s %s %s\n",
-				(void*)addr_pdpt, (void*)addr_pdpt_max,
+				(void*)state.pdpt_baddr, (void*)addr_pdpt_max,
 				e & _PAGE_RW ? "W" : "R",
 				e & _PAGE_USER ? "U" : "K" /*kernel*/,
 				e & _PAGE_PWT ? "PWT" : "",
