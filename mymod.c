@@ -82,6 +82,10 @@ struct dumptbl_state {
 	int pd_i;
 	u64 pd_baddr;
 
+	struct page_table *pt;
+	int pt_i;
+	u64 pt_baddr;
+
 	// compress output, don't print same entries all over
 	u64 last_addr;
 	u64 last_flags;
@@ -128,13 +132,13 @@ int dump_entry(struct seq_file *s, struct dumptbl_state *state, int bitpos)
 
 	int _direct_mapping = 0; //entry maps a page directly
 
-	CORNY_ASSERT(bitpos == 39 || bitpos == 30 || bitpos == 21);
+	CORNY_ASSERT(bitpos == 39 || bitpos == 30 || bitpos == 21 || bitpos == 12);
 	CORNY_ASSERT(state->pml4_i < 512);
 	CORNY_ASSERT(state->pdpt_i < 512);
 	CORNY_ASSERT(state->pd_i < 512);
 
 	switch(bitpos){
-		case 39: /*PML4*/
+		case 39: /*PML4 -- outer level*/
 			table = state->pml4;
 			i = state->pml4_i;
 			str_level = "pml4";
@@ -160,6 +164,14 @@ int dump_entry(struct seq_file *s, struct dumptbl_state *state, int bitpos)
 			outer_baddr = state->pdpt_baddr;
 			baddr = &state->pd_baddr;
 			break;
+		case 12: /*PT -- final level*/
+			table = state->pt;
+			i = state->pt_i;
+			str_level = "        pt";
+			CORNY_ASSERT((state->pml4_baddr | state->pdpt_baddr | state->pd_baddr) == state->pd_baddr);
+			outer_baddr = state->pd_baddr;
+			baddr = &state->pt_baddr;
+			break;
 	}
 
 	e = (u64)table->entry[i];
@@ -178,7 +190,9 @@ int dump_entry(struct seq_file *s, struct dumptbl_state *state, int bitpos)
 	CORNY_ASSERT(((state->pdpt_baddr & addr_max) == 0)); //no overlapping bits
 	addr_max |= *baddr;
 
-	if(e & _PAGE_PSE){
+	if((e & _PAGE_PSE) || bitpos == 12){
+		// PSE for 2MB or 1GB direct mapping
+		// bitpos == 12, then the _PAGE_PSE bit is the PAT bit. But for 4k pages, we always have a direct mapping
 		_direct_mapping = 1;
 		ret = 0; // do not descend to any deeper page tables!
 	}
@@ -311,11 +325,20 @@ static int dump_pagetable(struct seq_file *s)
 		state.pdpt = next_page_table_vaddr((u64)state.pml4->entry[state.pml4_i]);
 		for(state.pdpt_i = 0; state.pdpt_i < 512; ++state.pdpt_i){
 			if(dump_entry(s, &state, 30)){
+				//continue; //README says we just dump two levels
 				// walk next level
 				state.pd = next_page_table_vaddr((u64)state.pdpt->entry[state.pdpt_i]);
 				for(state.pd_i = 0; state.pd_i < 512; ++state.pd_i){
 					if(dump_entry(s, &state, 21)){
-						//print next levels here
+						//print final level here
+						state.pt = next_page_table_vaddr((u64)state.pd->entry[state.pd_i]);
+						for(state.pt_i = 0; state.pt_i < 512; ++state.pt_i){
+							CORNY_ASSERT(!dump_entry(s, &state, 12)); //we cannot go deeper!
+						};
+						// reset pt entries in state for assertions
+						state.pt = NULL;
+						state.pt_i = 0;
+						state.pt_baddr = 0;
 					}
 				};
 				// reset pd entries in state for assertions
