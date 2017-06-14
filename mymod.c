@@ -48,7 +48,7 @@ static int check_entry(u64 e){
 	return 1;
 }
 
-static struct dumptbl_state {
+struct dumptbl_state {
 	int maxphyaddr;
 
 	struct page_table *pml4; /*pointer to pml4 page table in virtual memory*/
@@ -76,14 +76,9 @@ static inline u64 pte_addr_part(int index, int bitpos)
  *  1: descend to deeper levels
  *  0: stop descending
  * */
-int dump_pdpt_entry(struct dumptbl_state *state, int bitpos)
+int dump_entry(struct dumptbl_state *state, int bitpos)
 {
-	CORNY_ASSERT(bitpos == 39 || bitpos == 30);
-	CORNY_ASSERT(state->pml4_i < 512);
-	CORNY_ASSERT(state->pdpt_i < 512);
-
 	char *str_level;
-
 	struct page_table *table; //page table
 	int i; //index into the table
 	u64 e; //page table entry 
@@ -91,6 +86,11 @@ int dump_pdpt_entry(struct dumptbl_state *state, int bitpos)
 	u64 *baddr; //pointer to state struct with base address of current entry. To be set in this function.
 	u64 outer_baddr; //base address of the outer page tables (base address of entry = outer_baddr | baddr)
 	u64 addr_max; //maximum virtual address described by the current page table entry
+
+
+	CORNY_ASSERT(bitpos == 39 || bitpos == 30);
+	CORNY_ASSERT(state->pml4_i < 512);
+	CORNY_ASSERT(state->pdpt_i < 512);
 
 	switch(bitpos){
 		case 39: /*PML4*/
@@ -215,12 +215,11 @@ static int dump_pagetable(void)
 	}
 
 	phys_addr_t pdpt_addr;
-
 	u64 bm; //bitmap
-	u64 addr_max;
+
 	//walk the outermost page table
 	for(state.pml4_i = 0; state.pml4_i < 512; ++state.pml4_i){
-		if(!dump_pdpt_entry(&state, 39)){
+		if(!dump_entry(&state, 39)){
 			//outer level cannot map a page directly but it can have pages which are nto present
 			continue;
 		}
@@ -240,7 +239,7 @@ static int dump_pagetable(void)
 		}
 		// walk next level
 		while(true){
-			if(dump_pdpt_entry(&state, 30)){
+			if(dump_entry(&state, 30)){
 				//print next levels here
 			}
 			if(++state.pdpt_i >= 512){
