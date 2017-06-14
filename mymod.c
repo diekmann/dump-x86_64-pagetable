@@ -71,6 +71,10 @@ static inline u64 pte_addr_part(int index, int bitpos)
 /* bitpos: The position of the bit of the virtual memory address that the current page table level refers to.
  * PML4 39:47 (inclusive)
  * PDPT 30:38 (inclusive)
+ *
+ * returns:
+ *  1: descend to deeper levels
+ *  0: stop descending
  * */
 int dump_pdpt_entry(struct dumptbl_state *state, int bitpos)
 {
@@ -115,7 +119,7 @@ int dump_pdpt_entry(struct dumptbl_state *state, int bitpos)
 	CORNY_ASSERT(check_entry(e));
 	if(!(e & _PAGE_PRESENT)){
 		/*skip page which is marked not present*/
-		return 1; //continue
+		return 0;
 	}
 	*baddr = outer_baddr | pte_addr_part(i, bitpos);
 	CORNY_ASSERT((outer_baddr & pte_addr_part(i, bitpos)) == 0); // no overlapping bits
@@ -216,33 +220,13 @@ static int dump_pagetable(void)
 	u64 addr_max;
 	//walk the outermost page table
 	for(state.pml4_i = 0; state.pml4_i < 512; ++state.pml4_i){
-		CORNY_ASSERT(dump_pdpt_entry(&state, 39)); //outer level cannot map a page directly
+		if(!dump_pdpt_entry(&state, 39)){
+			//outer level cannot map a page directly but it can have pages which are nto present
+			continue;
+		}
 
 		u64 e = (u64)state.pml4->entry[state.pml4_i];
 		CORNY_ASSERT(check_entry(e));
-		if(!(e & _PAGE_PRESENT)){
-			/*skip page which is marked not present*/
-			continue;
-		}
-		printk("entry %p\n", (void*)e);
-		state.pml4_baddr = state.pml4_i;
-		state.pml4_baddr <<= 39; //bits 39:47 (inclusive)
-		addr_max = 0x7fffffffffLL; //2**39-1
-		if(state.pml4_baddr & (1LL << 47) /*highest bit set*/){
-			CORNY_ASSERT((state.pml4_baddr & 0xffffLL<<48) == 0);
-			CORNY_ASSERT((addr_max & 0xffffLL<<48) == 0);
-			state.pml4_baddr |= (0xffffLL << 48);
-		}
-		addr_max |= state.pml4_baddr;
-		printk("v %p %p %s %s %s %s %s %s\n",
-			(void*)state.pml4_baddr, (void*)addr_max,
-			e & _PAGE_RW ? "W" : "R",
-			e & _PAGE_USER ? "U" : "K" /*kernel*/,
-			e & _PAGE_PWT ? "PWT" : "",
-			e & _PAGE_PCD ? "PCD" : "",
-			e & _PAGE_ACCESSED ? "A" : "",
-			e & _PAGE_NX ? "NX" : ""
-			);
 
 		/*phsical address of next page table level*/
 		bm = bitmask_numbits(51 - 12 + 1);
@@ -256,8 +240,8 @@ static int dump_pagetable(void)
 		}
 		// walk next level
 		while(true){
-			if(!dump_pdpt_entry(&state, 30)){
-				printk("stop descending here!\n");
+			if(dump_pdpt_entry(&state, 30)){
+				//print next levels here
 			}
 			if(++state.pdpt_i >= 512){
 				state.pdpt_i = 0;
