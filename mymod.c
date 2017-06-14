@@ -60,6 +60,14 @@ static struct dumptbl_state {
 	u64 pdpt_baddr;
 };
 
+/*The part of the virtual address defined by the page table entry at index for the page table level indicated by bitpos*/
+static inline u64 pte_addr_part(int index, int bitpos)
+{
+	CORNY_ASSERT(index < 512);
+	CORNY_ASSERT(bitpos == 39 || bitpos == 30);
+	return ((u64)index) << bitpos;
+}
+
 /* bitpos: The position of the bit of the virtual memory address that the current page table level refers to.
  * PML4 39:47 (inclusive)
  * PDPT 30:38 (inclusive)
@@ -85,8 +93,12 @@ int dump_pdpt_entry(struct dumptbl_state *state, int bitpos)
 			table = state->pml4;
 			i = state->pml4_i;
 			str_level = "pml4";
-			outer_baddr = 0;
 			baddr = &state->pml4_baddr;
+			//sign extend the most significant bits to canonical address
+			outer_baddr = 0;
+			if(pte_addr_part(i, 39) & (1LL << 47) /*highest bit set*/){
+				outer_baddr = (0xffffLL << 48);
+			}
 			break;
 		case 30: /*PDPT*/
 			table = state->pdpt;
@@ -105,13 +117,13 @@ int dump_pdpt_entry(struct dumptbl_state *state, int bitpos)
 		/*skip page which is marked not present*/
 		return 1; //continue
 	}
-	*baddr = outer_baddr | (((u64)i) << bitpos);
-	CORNY_ASSERT((outer_baddr & ((u64)i << bitpos)) == 0); // no overlapping bits
-	CORNY_ASSERT((state->pml4_baddr & state->pdpt_baddr) == state->pml4_baddr); //no overlapping bits
+	*baddr = outer_baddr | pte_addr_part(i, bitpos);
+	CORNY_ASSERT((outer_baddr & pte_addr_part(i, bitpos)) == 0); // no overlapping bits
 	CORNY_ASSERT(((state->pml4_baddr | state->pdpt_baddr) & state->pml4_baddr) == state->pml4_baddr); //no overlapping bits
 	addr_max = bitmask_numbits(bitpos);
 	CORNY_ASSERT((state->pml4_baddr & addr_max) == 0); //no overlapping bits
-	CORNY_ASSERT((state->pdpt_baddr & addr_max) == 0); //no overlapping bits
+	CORNY_ASSERT(bitpos == 39 || ((state->pml4_baddr & state->pdpt_baddr) == state->pml4_baddr)); //no overlapping bits
+	CORNY_ASSERT(bitpos == 39 || ((state->pdpt_baddr & addr_max) == 0)); //no overlapping bits
 	addr_max |= *baddr;
 	printk("%s v %p %p %s %s %s %s %s %s\n", str_level,
 		(void*)*baddr, (void*)addr_max,
@@ -204,6 +216,8 @@ static int dump_pagetable(void)
 	u64 addr_max;
 	//walk the outermost page table
 	for(state.pml4_i = 0; state.pml4_i < 512; ++state.pml4_i){
+		CORNY_ASSERT(dump_pdpt_entry(&state, 39)); //outer level cannot map a page directly
+
 		u64 e = (u64)state.pml4->entry[state.pml4_i];
 		CORNY_ASSERT(check_entry(e));
 		if(!(e & _PAGE_PRESENT)){
