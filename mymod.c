@@ -60,34 +60,61 @@ static struct dumptbl_state {
 	u64 pdpt_baddr;
 };
 
-int dump_pdpt_entry(struct dumptbl_state *state)
+/* bitpos: The position of the bit of the virtual memory address that the current page table level refers to.
+ * PML4 39:47 (inclusive)
+ * PDPT 30:38 (inclusive)
+ * */
+int dump_pdpt_entry(struct dumptbl_state *state, int bitpos)
 {
+	CORNY_ASSERT(bitpos == 39 || bitpos == 30);
 	CORNY_ASSERT(state->pml4_i < 512);
 	CORNY_ASSERT(state->pdpt_i < 512);
 
-	u64 addr_max; //maximum virtual address described by the current page table entry
-	u64 e = (u64)state->pdpt->entry[state->pdpt_i];
+	char *str_level;
 
-	/* The position of the bit of the virtual memory address that the current page table level refers to.
-	 * PML4 39:47 (inclusive)
-	 * PDPT 30:38 (inclusive)
-	 * */
-	int bitpos = 30;
+	struct page_table *table; //page table
+	int i; //index into the table
+	u64 e; //page table entry 
+
+	u64 *baddr; //pointer to state struct with base address of current entry. To be set in this function.
+	u64 outer_baddr; //base address of the outer page tables (base address of entry = outer_baddr | baddr)
+	u64 addr_max; //maximum virtual address described by the current page table entry
+
+	switch(bitpos){
+		case 39: /*PML4*/
+			table = state->pml4;
+			i = state->pml4_i;
+			str_level = "pml4";
+			outer_baddr = 0;
+			baddr = &state->pml4_baddr;
+			break;
+		case 30: /*PDPT*/
+			table = state->pdpt;
+			i = state->pdpt_i;
+			str_level = "  pdpt";
+			outer_baddr = state->pml4_baddr;
+			baddr = &state->pdpt_baddr;
+			break;
+	}
+
+	e = (u64)table->entry[i];
+
 
 	CORNY_ASSERT(check_entry(e));
 	if(!(e & _PAGE_PRESENT)){
 		/*skip page which is marked not present*/
-		goto increment_out;
+		return 1; //continue
 	}
-	state->pdpt_baddr = ((u64)state->pdpt_i) << bitpos;
-	CORNY_ASSERT((state->pml4_baddr & state->pdpt_baddr) == 0); //no overlapping bits
-	state->pdpt_baddr |= state->pml4_baddr;
+	*baddr = outer_baddr | (((u64)i) << bitpos);
+	CORNY_ASSERT((outer_baddr & ((u64)i << bitpos)) == 0); // no overlapping bits
+	CORNY_ASSERT((state->pml4_baddr & state->pdpt_baddr) == state->pml4_baddr); //no overlapping bits
+	CORNY_ASSERT(((state->pml4_baddr | state->pdpt_baddr) & state->pml4_baddr) == state->pml4_baddr); //no overlapping bits
 	addr_max = bitmask_numbits(bitpos);
 	CORNY_ASSERT((state->pml4_baddr & addr_max) == 0); //no overlapping bits
 	CORNY_ASSERT((state->pdpt_baddr & addr_max) == 0); //no overlapping bits
-	addr_max |= state->pdpt_baddr;
-	printk("  v %p %p %s %s %s %s %s %s\n",
-		(void*)state->pdpt_baddr, (void*)addr_max,
+	addr_max |= *baddr;
+	printk("%s v %p %p %s %s %s %s %s %s\n", str_level,
+		(void*)*baddr, (void*)addr_max,
 		e & _PAGE_RW ? "W" : "R",
 		e & _PAGE_USER ? "U" : "K" /*kernel*/,
 		e & _PAGE_PWT ? "PWT" : "",
@@ -96,17 +123,11 @@ int dump_pdpt_entry(struct dumptbl_state *state)
 		e & _PAGE_NX ? "NX" : ""
 		);
 	if(e & _PAGE_PSE){
+		CORNY_ASSERT(bitpos == 30);
 		printk("1GB page\n");
-		goto increment_out;
+		return 0; // do not descend to any deeper page tables!
 	}
-
-increment_out:
-	if(++state->pdpt_i >= 512){
-		state->pdpt_i = 0;
-		return 0;
-	}else{
-		return 1;
-	}
+	return 1; //continue
 }
 
 
@@ -219,7 +240,16 @@ static int dump_pagetable(void)
 			printk("pdpt invalid addr!\n");
 			return 1; /*error*/
 		}
-		while(dump_pdpt_entry(&state)){};
+		// walk next level
+		while(true){
+			if(!dump_pdpt_entry(&state, 30)){
+				printk("stop descending here!\n");
+			}
+			if(++state.pdpt_i >= 512){
+				state.pdpt_i = 0;
+				break;
+			}
+		};
 	}
 	return 0;
 }
