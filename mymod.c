@@ -22,10 +22,30 @@ static inline u64 bitmask_numbits(int numbits)
 	return (1LL << numbits) - 1;
 }
 
+
+/* A 4k intel page table with 512 64bit entries. */
 struct page_table{
 	void* entry[512];
 };
 
+
+/* Valid intel page sizes*/
+char* string_page_size(int bitpos)
+{
+	size_t pagesize;
+	CORNY_ASSERT(bitpos == 30 || bitpos == 21 || bitpos == 12);
+	pagesize = 1 << bitpos;
+	switch(pagesize){
+		case 1024*1024*1024:
+			return "1GB";
+		case 2*1024*1024:
+			return "2MB";
+		case 4*1024:
+			return "4KB";
+		default:
+			return "<BUG PAGESIZE>";
+	}
+}
 
 /* page table bits 51:M reserved, must be 0. Create global bitmask once.*/
 static u64 pte_reserved_flags;
@@ -38,8 +58,7 @@ static int check_entry(u64 e){
 		return 0;
 	}
 	if(e & _PAGE_PSE){
-		printk("must be 0!\n");
-		return 0;
+		//TODO references a page directly, probably sanity check address?
 	}
 	if(!(e & _PAGE_PRESENT) && e){
 		printk("strange entry!\n");
@@ -58,19 +77,24 @@ struct dumptbl_state {
 	struct page_table *pdpt;
 	int pdpt_i;
 	u64 pdpt_baddr;
+
+	struct page_table *pd;
+	int pd_i;
+	u64 pd_baddr;
 };
 
 /*The part of the virtual address defined by the page table entry at index for the page table level indicated by bitpos*/
 static inline u64 pte_addr_part(int index, int bitpos)
 {
 	CORNY_ASSERT(index < 512);
-	CORNY_ASSERT(bitpos == 39 || bitpos == 30);
+	CORNY_ASSERT(bitpos == 39 || bitpos == 30 || bitpos == 21 || bitpos == 12);
 	return ((u64)index) << bitpos;
 }
 
 /* bitpos: The position of the bit of the virtual memory address that the current page table level refers to.
  * PML4 39:47 (inclusive)
  * PDPT 30:38 (inclusive)
+ * PD   21:29 (inclusive)
  *
  * returns:
  *  1: descend to deeper levels
@@ -88,9 +112,10 @@ int dump_entry(struct dumptbl_state *state, int bitpos)
 	u64 addr_max; //maximum virtual address described by the current page table entry
 
 
-	CORNY_ASSERT(bitpos == 39 || bitpos == 30);
+	CORNY_ASSERT(bitpos == 39 || bitpos == 30 || bitpos == 21);
 	CORNY_ASSERT(state->pml4_i < 512);
 	CORNY_ASSERT(state->pdpt_i < 512);
+	CORNY_ASSERT(state->pd_i < 512);
 
 	switch(bitpos){
 		case 39: /*PML4*/
@@ -110,6 +135,14 @@ int dump_entry(struct dumptbl_state *state, int bitpos)
 			str_level = "  pdpt";
 			outer_baddr = state->pml4_baddr;
 			baddr = &state->pdpt_baddr;
+			break;
+		case 21: /*PD*/
+			table = state->pd;
+			i = state->pd_i;
+			str_level = "    pd";
+			CORNY_ASSERT((state->pml4_baddr | state->pdpt_baddr) == state->pdpt_baddr);
+			outer_baddr = state->pdpt_baddr;
+			baddr = &state->pd_baddr;
 			break;
 	}
 
@@ -138,8 +171,7 @@ int dump_entry(struct dumptbl_state *state, int bitpos)
 		e & _PAGE_NX ? "NX" : ""
 		);
 	if(e & _PAGE_PSE){
-		CORNY_ASSERT(bitpos == 30);
-		printk("1GB page\n");
+		printk("%s page\n", string_page_size(bitpos));
 		return 0; // do not descend to any deeper page tables!
 	}
 	return 1; //continue
@@ -239,12 +271,21 @@ static int dump_pagetable(void)
 			continue;
 		}
 
-		state.pdpt = next_page_table_vaddr((u64)state.pml4->entry[state.pml4_i]);
-
 		// walk next level
+		state.pdpt = next_page_table_vaddr((u64)state.pml4->entry[state.pml4_i]);
 		for(state.pdpt_i = 0; state.pdpt_i < 512; ++state.pdpt_i){
 			if(dump_entry(&state, 30)){
-				//print next levels here
+				// walk next level
+				state.pd = next_page_table_vaddr((u64)state.pdpt->entry[state.pdpt_i]);
+				for(state.pd_i = 0; state.pd_i < 512; ++state.pd_i){
+					if(dump_entry(&state, 21)){
+						//print next levels here
+					}
+				};
+				// reset pd entries in state for assertions
+				state.pd = NULL;
+				state.pd_i = 0;
+				state.pd_baddr = 0;
 			}
 		};
 		// reset pdpt entries in state for assertions
