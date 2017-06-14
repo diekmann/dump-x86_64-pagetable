@@ -325,7 +325,7 @@ static int dump_pagetable(struct seq_file *s)
 		state.pdpt = next_page_table_vaddr((u64)state.pml4->entry[state.pml4_i]);
 		for(state.pdpt_i = 0; state.pdpt_i < 512; ++state.pdpt_i){
 			if(dump_entry(s, &state, 30)){
-				//continue; //README says we just dump two levels
+				continue; //README says we just dump two levels
 				// walk next level
 				state.pd = next_page_table_vaddr((u64)state.pdpt->entry[state.pdpt_i]);
 				for(state.pd_i = 0; state.pd_i < 512; ++state.pd_i){
