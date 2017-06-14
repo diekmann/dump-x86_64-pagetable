@@ -11,7 +11,7 @@
 
 #ifndef X86_CR4_PKE
 //defined in Linux >= 4.6
-#define X86_CR4_PKE_BIT		22 /* enable Protection Keys support */
+#define X86_CR4_PKE_BIT		22 /*Protection Keys support */
 #define X86_CR4_PKE		_BITUL(X86_CR4_PKE_BIT)
 #endif
 
@@ -126,8 +126,7 @@ int dump_entry(struct dumptbl_state *state, int bitpos)
 	CORNY_ASSERT(((state->pml4_baddr | state->pdpt_baddr) & state->pml4_baddr) == state->pml4_baddr); //no overlapping bits
 	addr_max = bitmask_numbits(bitpos);
 	CORNY_ASSERT((state->pml4_baddr & addr_max) == 0); //no overlapping bits
-	CORNY_ASSERT(bitpos == 39 || ((state->pml4_baddr & state->pdpt_baddr) == state->pml4_baddr)); //no overlapping bits
-	CORNY_ASSERT(bitpos == 39 || ((state->pdpt_baddr & addr_max) == 0)); //no overlapping bits
+	CORNY_ASSERT(((state->pdpt_baddr & addr_max) == 0)); //no overlapping bits
 	addr_max |= *baddr;
 	printk("%s v %p %p %s %s %s %s %s %s\n", str_level,
 		(void*)*baddr, (void*)addr_max,
@@ -146,6 +145,24 @@ int dump_entry(struct dumptbl_state *state, int bitpos)
 	return 1; //continue
 }
 
+void* next_page_table_vaddr(u64 pagetbl_entry)
+{
+	void *vaddr; //virtual addr of page table entry
+	phys_addr_t paddr; //physical addr of page table entry
+
+	/*pagetble_entry bits 51:12 contains the physical address of the next page table level*/
+	u64 bm = bitmask_numbits(51 - 12 + 1) << 12;
+	paddr = pagetbl_entry & bm;
+	/*Actually, 51:.. is too generous, there are some reserved bits which must be zero*/
+	CORNY_ASSERT((pagetbl_entry & pte_reserved_flags) == 0);
+
+	vaddr = phys_to_virt(paddr);
+	if(!virt_addr_valid(vaddr) || !IS_ALIGNED(paddr, 4096)){
+		printk("CRITICAL: invalid addr!\n");
+		return NULL; /*error*/
+	}
+	return vaddr;
+}
 
 static int dump_pagetable(void)
 {
@@ -214,8 +231,6 @@ static int dump_pagetable(void)
 		return 1; /*error*/
 	}
 
-	phys_addr_t pdpt_addr;
-	u64 bm; //bitmap
 
 	//walk the outermost page table
 	for(state.pml4_i = 0; state.pml4_i < 512; ++state.pml4_i){
@@ -224,29 +239,18 @@ static int dump_pagetable(void)
 			continue;
 		}
 
-		u64 e = (u64)state.pml4->entry[state.pml4_i];
-		CORNY_ASSERT(check_entry(e));
+		state.pdpt = next_page_table_vaddr((u64)state.pml4->entry[state.pml4_i]);
 
-		/*phsical address of next page table level*/
-		bm = bitmask_numbits(51 - 12 + 1);
-		bm <<= 12;
-		pdpt_addr = e & bm;
-
-		state.pdpt = phys_to_virt(pdpt_addr);
-		if(!virt_addr_valid(state.pdpt) || !IS_ALIGNED(pdpt_addr, 4096)){
-			printk("pdpt invalid addr!\n");
-			return 1; /*error*/
-		}
 		// walk next level
-		while(true){
+		for(state.pdpt_i = 0; state.pdpt_i < 512; ++state.pdpt_i){
 			if(dump_entry(&state, 30)){
 				//print next levels here
 			}
-			if(++state.pdpt_i >= 512){
-				state.pdpt_i = 0;
-				break;
-			}
 		};
+		// reset pdpt entries in state for assertions
+		state.pdpt = NULL;
+		state.pdpt_i = 0;
+		state.pdpt_baddr = 0;
 	}
 	return 0;
 }
