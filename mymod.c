@@ -15,7 +15,7 @@
 #define X86_CR4_PKE		_BITUL(X86_CR4_PKE_BIT)
 #endif
 
-#define CORNY_ASSERT(cond) do { if (!(cond)) {printk("Assertion failed\n");} } while (0)
+#define CORNY_ASSERT(cond) do { if (!(cond)) {printk("Assertion failed: "#cond" at %s, line %d.\n", __FILE__, __LINE__);} } while (0)
 
 static inline u64 bitmask_numbits(int numbits)
 {
@@ -65,23 +65,29 @@ int dump_pdpt_entry(struct dumptbl_state *state)
 	CORNY_ASSERT(state->pml4_i < 512);
 	CORNY_ASSERT(state->pdpt_i < 512);
 
-	u64 addr_pdpt_max;
+	u64 addr_max; //maximum virtual address described by the current page table entry
 	u64 e = (u64)state->pdpt->entry[state->pdpt_i];
+
+	/* The position of the bit of the virtual memory address that the current page table level refers to.
+	 * PML4 39:47 (inclusive)
+	 * PDPT 30:38 (inclusive)
+	 * */
+	int bitpos = 30;
 
 	CORNY_ASSERT(check_entry(e));
 	if(!(e & _PAGE_PRESENT)){
 		/*skip page which is marked not present*/
 		goto increment_out;
 	}
-	state->pdpt_baddr = state->pdpt_i;
-	state->pdpt_baddr <<= 30; //bits 30:38 (inclusive)
-	CORNY_ASSERT((state->pml4_baddr & state->pdpt_baddr) == 0);//no overlapping bits
+	state->pdpt_baddr = ((u64)state->pdpt_i) << bitpos;
+	CORNY_ASSERT((state->pml4_baddr & state->pdpt_baddr) == 0); //no overlapping bits
 	state->pdpt_baddr |= state->pml4_baddr;
-	addr_pdpt_max = bitmask_numbits(30);
-	CORNY_ASSERT((state->pml4_baddr & addr_pdpt_max) == 0);//no overlapping bits
-	addr_pdpt_max |= state->pdpt_baddr;
+	addr_max = bitmask_numbits(bitpos);
+	CORNY_ASSERT((state->pml4_baddr & addr_max) == 0); //no overlapping bits
+	CORNY_ASSERT((state->pdpt_baddr & addr_max) == 0); //no overlapping bits
+	addr_max |= state->pdpt_baddr;
 	printk("  v %p %p %s %s %s %s %s %s\n",
-		(void*)state->pdpt_baddr, (void*)addr_pdpt_max,
+		(void*)state->pdpt_baddr, (void*)addr_max,
 		e & _PAGE_RW ? "W" : "R",
 		e & _PAGE_USER ? "U" : "K" /*kernel*/,
 		e & _PAGE_PWT ? "PWT" : "",
