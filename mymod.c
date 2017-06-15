@@ -28,12 +28,21 @@ struct page_table{
 	void* entry[512];
 };
 
+/* Each level of page tables is responsible for 9 bits of the virtual address.
+ * PML4 39:47 (inclusive)
+ * PDPT 30:38 (inclusive)
+ * PD   21:29 (inclusive)
+ * PT   12:20 (inclusive)
+ * (0:11 are the offset in a 4K page)
+ * The position of the bit of the virtual memory address that the page table level refers to.
+ */
+enum pt_addr_bit { PML4=39, PDPT=30, PD=21, PT=12 };
 
 /* Valid intel page sizes*/
-char* string_page_size(int bitpos)
+char* string_page_size(enum pt_addr_bit bitpos)
 {
 	size_t pagesize;
-	CORNY_ASSERT(bitpos == 30 || bitpos == 21 || bitpos == 12);
+	CORNY_ASSERT(bitpos == PDPT || bitpos == PD || bitpos == PT);
 	pagesize = 1 << bitpos;
 	switch(pagesize){
 		case 1024*1024*1024:
@@ -101,23 +110,20 @@ static inline u64 entry_extract_flags(u64 entry)
 
 
 /*The part of the virtual address defined by the page table entry at index for the page table level indicated by bitpos*/
-static inline u64 pte_addr_part(int index, int bitpos)
+static inline u64 pte_addr_part(int index, enum pt_addr_bit bitpos)
 {
 	CORNY_ASSERT(index < 512);
-	CORNY_ASSERT(bitpos == 39 || bitpos == 30 || bitpos == 21 || bitpos == 12);
+	CORNY_ASSERT(bitpos == PML4 || bitpos == PDPT || bitpos == PD || bitpos == PT);
 	return ((u64)index) << bitpos;
 }
 
 /* bitpos: The position of the bit of the virtual memory address that the current page table level refers to.
- * PML4 39:47 (inclusive)
- * PDPT 30:38 (inclusive)
- * PD   21:29 (inclusive)
  *
  * returns:
  *  1: descend to deeper levels
  *  0: stop descending
  * */
-int dump_entry(struct seq_file *s, struct dumptbl_state *state, int bitpos)
+int dump_entry(struct seq_file *s, struct dumptbl_state *state, enum pt_addr_bit bitpos)
 {
 	char *str_level;
 	struct page_table *table; //page table
@@ -132,13 +138,13 @@ int dump_entry(struct seq_file *s, struct dumptbl_state *state, int bitpos)
 
 	int _direct_mapping = 0; //entry maps a page directly
 
-	CORNY_ASSERT(bitpos == 39 || bitpos == 30 || bitpos == 21 || bitpos == 12);
+	CORNY_ASSERT(bitpos == PML4 || bitpos == PDPT || bitpos == PD || bitpos == PT);
 	CORNY_ASSERT(state->pml4_i < 512);
 	CORNY_ASSERT(state->pdpt_i < 512);
 	CORNY_ASSERT(state->pd_i < 512);
 
 	switch(bitpos){
-		case 39: /*PML4 -- outer level*/
+		case PML4: /*outer level*/
 			table = state->pml4;
 			i = state->pml4_i;
 			str_level = "pml4";
@@ -149,14 +155,14 @@ int dump_entry(struct seq_file *s, struct dumptbl_state *state, int bitpos)
 				outer_baddr = (0xffffLL << 48);
 			}
 			break;
-		case 30: /*PDPT*/
+		case PDPT:
 			table = state->pdpt;
 			i = state->pdpt_i;
 			str_level = "  pdpt";
 			outer_baddr = state->pml4_baddr;
 			baddr = &state->pdpt_baddr;
 			break;
-		case 21: /*PD*/
+		case PD:
 			table = state->pd;
 			i = state->pd_i;
 			str_level = "      pd";
@@ -164,7 +170,7 @@ int dump_entry(struct seq_file *s, struct dumptbl_state *state, int bitpos)
 			outer_baddr = state->pdpt_baddr;
 			baddr = &state->pd_baddr;
 			break;
-		case 12: /*PT -- final level*/
+		case PT: /*final level*/
 			table = state->pt;
 			i = state->pt_i;
 			str_level = "        pt";
@@ -190,9 +196,9 @@ int dump_entry(struct seq_file *s, struct dumptbl_state *state, int bitpos)
 	CORNY_ASSERT(((state->pdpt_baddr & addr_max) == 0)); //no overlapping bits
 	addr_max |= *baddr;
 
-	if((e & _PAGE_PSE) || bitpos == 12){
+	if((e & _PAGE_PSE) || bitpos == PT){
 		// PSE for 2MB or 1GB direct mapping
-		// bitpos == 12, then the _PAGE_PSE bit is the PAT bit. But for 4k pages, we always have a direct mapping
+		// bitpos == PT, then the _PAGE_PSE bit is the PAT bit. But for 4k pages, we always have a direct mapping
 		_direct_mapping = 1;
 		ret = 0; // do not descend to any deeper page tables!
 	}
@@ -316,20 +322,20 @@ static int dump_pagetable(struct seq_file *s)
 	// 4 nested for loops to walk 4 levels of pages
 	// walk the outermost page table
 	for(state.pml4_i = 0; state.pml4_i < 512; ++state.pml4_i){
-		if(dump_entry(s, &state, 39)){
+		if(dump_entry(s, &state, PML4)){
 			// walk next level
 			state.pdpt = next_page_table_vaddr((u64)state.pml4->entry[state.pml4_i]);
 			for(state.pdpt_i = 0; state.pdpt_i < 512; ++state.pdpt_i){
-				if(dump_entry(s, &state, 30)){
+				if(dump_entry(s, &state, PDPT)){
 					continue; //README says we just dump two levels
 					// walk next level
 					state.pd = next_page_table_vaddr((u64)state.pdpt->entry[state.pdpt_i]);
 					for(state.pd_i = 0; state.pd_i < 512; ++state.pd_i){
-						if(dump_entry(s, &state, 21)){
+						if(dump_entry(s, &state, PD)){
 							//print final level here
 							state.pt = next_page_table_vaddr((u64)state.pd->entry[state.pd_i]);
 							for(state.pt_i = 0; state.pt_i < 512; ++state.pt_i){
-								CORNY_ASSERT(!dump_entry(s, &state, 12)); //we cannot go deeper!
+								CORNY_ASSERT(!dump_entry(s, &state, PT)); //we cannot go deeper!
 							};
 							// reset pt entries in state for assertions
 							state.pt = NULL;
