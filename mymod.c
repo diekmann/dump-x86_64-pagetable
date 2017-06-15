@@ -15,7 +15,10 @@
 #define X86_CR4_PKE		_BITUL(X86_CR4_PKE_BIT)
 #endif
 
-#define CORNY_ASSERT(cond) do { if (!(cond)) {printk("Assertion failed: "#cond" at %s, line %d.\n", __FILE__, __LINE__);} } while (0)
+#define CORNY_ASSERT(cond) do { \
+	if (!(cond)) {\
+		printk("Assertion failed: "#cond" at %s, line %d.\n", __FILE__, __LINE__);\
+	}} while (0)
 
 static inline u64 bitmask_numbits(int numbits)
 {
