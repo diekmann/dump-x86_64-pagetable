@@ -313,44 +313,41 @@ static int dump_pagetable(struct seq_file *s)
 		return 1; /*error*/
 	}
 
-
-	//walk the outermost page table
+	// 4 nested for loops to walk 4 levels of pages
+	// walk the outermost page table
 	for(state.pml4_i = 0; state.pml4_i < 512; ++state.pml4_i){
-		if(!dump_entry(s, &state, 39)){
-			//outer level cannot map a page directly but it can have pages which are nto present
-			continue;
+		if(dump_entry(s, &state, 39)){
+			// walk next level
+			state.pdpt = next_page_table_vaddr((u64)state.pml4->entry[state.pml4_i]);
+			for(state.pdpt_i = 0; state.pdpt_i < 512; ++state.pdpt_i){
+				if(dump_entry(s, &state, 30)){
+					continue; //README says we just dump two levels
+					// walk next level
+					state.pd = next_page_table_vaddr((u64)state.pdpt->entry[state.pdpt_i]);
+					for(state.pd_i = 0; state.pd_i < 512; ++state.pd_i){
+						if(dump_entry(s, &state, 21)){
+							//print final level here
+							state.pt = next_page_table_vaddr((u64)state.pd->entry[state.pd_i]);
+							for(state.pt_i = 0; state.pt_i < 512; ++state.pt_i){
+								CORNY_ASSERT(!dump_entry(s, &state, 12)); //we cannot go deeper!
+							};
+							// reset pt entries in state for assertions
+							state.pt = NULL;
+							state.pt_i = 0;
+							state.pt_baddr = 0;
+						}
+					};
+					// reset pd entries in state for assertions
+					state.pd = NULL;
+					state.pd_i = 0;
+					state.pd_baddr = 0;
+				}
+			};
+			// reset pdpt entries in state for assertions
+			state.pdpt = NULL;
+			state.pdpt_i = 0;
+			state.pdpt_baddr = 0;
 		}
-
-		// walk next level
-		state.pdpt = next_page_table_vaddr((u64)state.pml4->entry[state.pml4_i]);
-		for(state.pdpt_i = 0; state.pdpt_i < 512; ++state.pdpt_i){
-			if(dump_entry(s, &state, 30)){
-				continue; //README says we just dump two levels
-				// walk next level
-				state.pd = next_page_table_vaddr((u64)state.pdpt->entry[state.pdpt_i]);
-				for(state.pd_i = 0; state.pd_i < 512; ++state.pd_i){
-					if(dump_entry(s, &state, 21)){
-						//print final level here
-						state.pt = next_page_table_vaddr((u64)state.pd->entry[state.pd_i]);
-						for(state.pt_i = 0; state.pt_i < 512; ++state.pt_i){
-							CORNY_ASSERT(!dump_entry(s, &state, 12)); //we cannot go deeper!
-						};
-						// reset pt entries in state for assertions
-						state.pt = NULL;
-						state.pt_i = 0;
-						state.pt_baddr = 0;
-					}
-				};
-				// reset pd entries in state for assertions
-				state.pd = NULL;
-				state.pd_i = 0;
-				state.pd_baddr = 0;
-			}
-		};
-		// reset pdpt entries in state for assertions
-		state.pdpt = NULL;
-		state.pdpt_i = 0;
-		state.pdpt_baddr = 0;
 	}
 	return 0;
 }
